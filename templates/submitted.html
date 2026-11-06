@@ -7,9 +7,17 @@
     <p class="muted">Save this complaint ID. You need it to track progress.</p>
     <p class="big-id">{{ r['complaint_id'] }}</p>
     {% if r['duplicate_of'] %}
-        <p class="note">Your report was linked to a similar open issue, which raises its priority.</p>
+        <p class="note">The same problem was already reported by someone else. Your report is linked to it, and you will get the same updates.</p>
     {% endif %}
     <p class="note">An administrator has not reviewed your report yet, so it shows as Unverified until they do.</p>
+    {% if r['contact_email'] or r['contact_phone'] %}
+        <p class="note">
+            We will send updates to
+            {% if r['contact_email'] %}{{ r['contact_email']|mask_email }}{% endif %}
+            {% if r['contact_email'] and r['contact_phone'] %} and {% endif %}
+            {% if r['contact_phone'] %}{{ r['contact_phone']|mask_phone }}{% endif %}.
+        </p>
+    {% endif %}
     <p>
         <a href="{{ url_for('track_detail', complaint_id=r['complaint_id']) }}" class="btn">Track this report</a>
         <a href="/report" class="btn secondary">Report another</a>

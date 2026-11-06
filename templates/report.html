@@ -40,6 +40,23 @@
         <input id="image" name="image" type="file" accept="image/png,image/jpeg,image/webp">
         <p class="hint">Avoid photos that show faces or number plates.</p>
 
+        <fieldset class="contact">
+            <legend>Get updates <span class="muted">(optional)</span></legend>
+            <label for="contact_email">Email</label>
+            <input id="contact_email" name="contact_email" type="email" maxlength="254"
+                   placeholder="you@example.com" value="{{ form.get('contact_email', '') }}">
+
+            <label for="contact_phone">Mobile number</label>
+            <input id="contact_phone" name="contact_phone" type="tel" maxlength="20"
+                   placeholder="9876543210" value="{{ form.get('contact_phone', '') }}">
+
+            <label class="check">
+                <input type="checkbox" name="consent" {% if form.get('consent') %}checked{% endif %}>
+                I agree to receive updates about this report by email or SMS.
+            </label>
+            <p class="hint">Used only to send updates about this report. It is never shown publicly.</p>
+        </fieldset>
+
         <button type="submit" class="btn full">Submit report</button>
     </form>
 </section>

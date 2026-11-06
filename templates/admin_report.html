@@ -34,8 +34,34 @@
                     <span class="muted">({% for l in linked %}{{ l['complaint_id'] }}{% if not loop.last %}, {% endif %}{% endfor %})</span>
                 </li>
             {% endif %}
+            <li><strong>Contact for updates:</strong>
+                {% if r['contact_email'] or r['contact_phone'] %}
+                    {{ r['contact_email']|mask_email }} {{ r['contact_phone']|mask_phone }}
+                {% else %}None given{% endif %}
+            </li>
             {% if r['citizen_verified'] == 1 %}<li><strong>Citizen confirmed the fix.</strong></li>{% endif %}
         </ul>
+
+        <h3>Notifications sent for this issue</h3>
+        {% if sent %}
+        <div class="table-wrap">
+        <table>
+            <thead><tr><th>Report</th><th>Channel</th><th>Message</th><th>Status</th></tr></thead>
+            <tbody>
+            {% for n in sent %}
+                <tr>
+                    <td>{{ n['complaint_id'] }}</td>
+                    <td>{{ n['channel']|upper }}</td>
+                    <td class="msg">{{ n['message'] }}</td>
+                    <td><span class="badge {{ n['status'] }}">{{ n['status']|capitalize }}</span></td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% else %}
+            <p class="muted">No notifications yet. They are sent when the reporter gave an email or mobile number.</p>
+        {% endif %}
 
         <h3>Timeline</h3>
         <ol class="timeline">

@@ -5,12 +5,23 @@
     <p class="muted">Complaint {{ r['complaint_id'] }}</p>
     <h1>{{ r['title'] }}</h1>
     <p>
-        <span class="badge {{ r['status'] }}">{{ STATUS_LABELS[r['status']] }}</span>
-        {% if not r['is_verified'] %}<span class="badge unverified">Unverified</span>{% endif %}
+        <span class="badge {{ shown['status'] }}">{{ STATUS_LABELS[shown['status']] }}</span>
+        {% if not shown['is_verified'] %}<span class="badge unverified">Unverified</span>{% endif %}
         <span class="muted">{{ CATEGORIES[r['category']][0] }} · reported {{ r['created_at'][:10] }}</span>
     </p>
-    {% if not r['is_verified'] %}
+
+    {% if original %}
+        <p class="note">The same problem was already reported by someone else, so your report is linked to it. The progress below is for that problem, and you will get an email or SMS when it changes.</p>
+    {% elif not r['is_verified'] %}
         <p class="note">An administrator has not reviewed this report yet.</p>
+    {% endif %}
+
+    {% if r['contact_email'] or r['contact_phone'] %}
+        <p class="muted">Updates are sent to
+            {% if r['contact_email'] %}{{ r['contact_email']|mask_email }}{% endif %}
+            {% if r['contact_email'] and r['contact_phone'] %} and {% endif %}
+            {% if r['contact_phone'] %}{{ r['contact_phone']|mask_phone }}{% endif %}.
+        </p>
     {% endif %}
 
     <h3>Your description</h3>
@@ -33,7 +44,7 @@
         {% endfor %}
     </ol>
 
-    {% if r['status'] == 'resolved' and r['citizen_verified'] is none %}
+    {% if not original and r['status'] == 'resolved' and r['citizen_verified'] is none %}
     <div class="verify-box">
         <h3>Is the problem actually fixed?</h3>
         <p class="muted">Your answer helps us confirm the work was done.</p>
@@ -44,7 +55,7 @@
             <button type="submit" name="fixed" value="no" class="btn danger">No, it is still a problem</button>
         </form>
     </div>
-    {% elif r['status'] == 'resolved' and r['citizen_verified'] == 1 %}
+    {% elif not original and r['status'] == 'resolved' and r['citizen_verified'] == 1 %}
         <p class="note success-note">You confirmed this fix. Thank you.</p>
     {% endif %}
 </section>

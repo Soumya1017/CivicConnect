@@ -1,5 +1,6 @@
 import math
 import os
+import re
 import secrets
 import sqlite3
 from datetime import datetime
@@ -9,6 +10,8 @@ from flask import (Flask, abort, flash, g, jsonify, redirect, render_template,
                    request, session, url_for)
 from werkzeug.utils import secure_filename
 
+import notifier
+
 # ---------------------------------------------------------------------
 # Setup
 # ---------------------------------------------------------------------
@@ -17,6 +20,24 @@ DB_PATH = os.path.join(BASE_DIR, "database.db")
 UPLOAD_DIR = os.path.join(BASE_DIR, "static", "uploads")
 ALLOWED_EXT = {"png", "jpg", "jpeg", "webp"}
 
+
+
+def load_env():
+    """Read settings from a .env file next to app.py (optional)."""
+    path = os.path.join(BASE_DIR, ".env")
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8-sig") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+load_env()
+
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB uploads
@@ -24,6 +45,10 @@ app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB uploads
 # Change the admin password before you show this to anyone:
 #   Windows (PowerShell):  $env:ADMIN_PASSWORD="mypassword"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+
+# Link used inside emails/SMS. Use your laptop's address if phones must open it.
+BASE_URL = os.environ.get("APP_BASE_URL", "http://127.0.0.1:5000").rstrip("/")
+DEFAULT_COUNTRY_CODE = os.environ.get("DEFAULT_COUNTRY_CODE", "+91")
 
 # Map starts here (change to your city centre: latitude, longitude)
 MAP_CENTER = (12.9716, 77.5946)
@@ -87,6 +112,8 @@ def init_db():
             duplicate_of INTEGER,
             duplicate_count INTEGER NOT NULL DEFAULT 0,
             citizen_verified INTEGER,
+            contact_email TEXT,
+            contact_phone TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             resolved_at TEXT
@@ -100,8 +127,26 @@ def init_db():
             created_at TEXT NOT NULL,
             FOREIGN KEY (report_id) REFERENCES reports(id)
         );
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id INTEGER NOT NULL,
+            channel TEXT NOT NULL,
+            recipient TEXT NOT NULL,
+            subject TEXT,
+            message TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            error TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (report_id) REFERENCES reports(id)
+        );
         """
     )
+    # Upgrade an older database.db that was created before contact details existed
+    columns = {row[1] for row in db.execute("PRAGMA table_info(reports)")}
+    if "contact_email" not in columns:
+        db.execute("ALTER TABLE reports ADD COLUMN contact_email TEXT")
+    if "contact_phone" not in columns:
+        db.execute("ALTER TABLE reports ADD COLUMN contact_phone TEXT")
     db.commit()
     db.close()
 
@@ -178,7 +223,7 @@ def find_duplicates(db, category, lat, lng, radius_m=100):
                 "distance": round(d),
                 "status_label": STATUS_LABELS[r["status"]],
             })
-    found.sort(key=lambda x: x["distance"])
+    found.sort(key=lambda x: x["id"])  # first raised comes first
     return found[:5]
 
 
@@ -202,6 +247,144 @@ def parse_location(lat_raw, lng_raw):
     if not (-90 <= lat <= 90 and -180 <= lng <= 180):
         return None, None, "Location is outside the valid range."
     return lat, lng, None
+
+
+EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+
+
+def normalise_phone(raw):
+    """Return (phone, error). Accepts 9876543210 or +919876543210 style numbers."""
+    p = re.sub(r"[\s\-()]", "", raw or "")
+    if not p:
+        return None, None
+    if re.fullmatch(r"\d{10}", p):
+        return DEFAULT_COUNTRY_CODE + p, None
+    if re.fullmatch(r"\+\d{8,15}", p):
+        return p, None
+    return None, "Enter a valid mobile number, for example 9876543210 or +919876543210."
+
+
+@app.template_filter("mask_email")
+def mask_email(value):
+    if not value or "@" not in value:
+        return ""
+    name, domain = value.split("@", 1)
+    return name[:1] + "***@" + domain
+
+
+@app.template_filter("mask_phone")
+def mask_phone(value):
+    if not value:
+        return ""
+    return value[:3] + "******" + value[-2:] if len(value) > 6 else "***"
+
+
+def short(text, limit=80):
+    text = (text or "").strip()
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+# ---------------------------------------------------------------------
+# Notifications (email + SMS)
+# ---------------------------------------------------------------------
+STATUS_PHRASES = {
+    "under_review": "has been reviewed by our team",
+    "in_progress": "is now in progress",
+    "resolved": "has been marked as resolved",
+    "rejected": "could not be accepted",
+    "reopened": "has been reopened and will be looked at again",
+}
+OPEN_PHRASES = {
+    "submitted": "is waiting for review",
+    "under_review": "has already been reviewed by our team",
+    "in_progress": "has already been reviewed and is in progress",
+    "reopened": "is being looked at again",
+}
+
+
+def send_notifications(db, report, subject, email_text, sms_text):
+    """Save a log row for each contact the person gave. Sent after the request finishes."""
+    jobs = g.setdefault("jobs", [])
+    for channel, recipient, text in (
+        ("email", report["contact_email"], email_text),
+        ("sms", report["contact_phone"], sms_text),
+    ):
+        if not recipient:
+            continue
+        cur = db.execute(
+            "INSERT INTO notifications (report_id, channel, recipient, subject, message, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            (report["id"], channel, recipient, subject, text, now_str()),
+        )
+        jobs.append({"id": cur.lastrowid, "channel": channel, "recipient": recipient,
+                     "subject": subject, "message": text})
+
+
+def notify_received(db, r):
+    link = f"{BASE_URL}/track/{r['complaint_id']}"
+    email = (
+        f"Hello,\n\nWe received your report \"{r['title']}\".\n\n"
+        f"Your complaint ID: {r['complaint_id']}\nTrack it here: {link}\n\n"
+        "It shows as Unverified until an administrator reviews it. "
+        "We will contact you when that happens.\n\nCivicConnect"
+    )
+    sms = f"CivicConnect: report received. Your ID is {r['complaint_id']}. We will update you after review."
+    send_notifications(db, r, f"CivicConnect: report {r['complaint_id']} received", email, sms)
+
+
+def notify_linked_on_submit(db, r, original):
+    """Someone reported a problem that was already raised: tell them it is being handled."""
+    phrase = OPEN_PHRASES.get(original["status"], "is being handled")
+    link = f"{BASE_URL}/track/{r['complaint_id']}"
+    email = (
+        f"Hello,\n\nThank you for reporting \"{r['title']}\" (your ID: {r['complaint_id']}).\n\n"
+        f"The same problem was already reported by someone else earlier, and it {phrase}. "
+        "We have linked your report to it, so the problem is not handled twice and your report "
+        "adds to its priority.\n\n"
+        f"You will receive an update whenever its status changes. Track it here: {link}\n\nCivicConnect"
+    )
+    sms = (f"CivicConnect: the problem you reported ({r['complaint_id']}) was already raised by someone "
+           f"else and {phrase}. Your report is linked. You will get updates.")
+    send_notifications(db, r, f"CivicConnect: your report {r['complaint_id']} is linked to an existing issue",
+                       email, sms)
+
+
+def notify_status_change(db, r, new_status, note):
+    """Tell the first reporter AND everyone whose report was linked to it."""
+    phrase = STATUS_PHRASES.get(new_status)
+    if not phrase:
+        return
+    note_line = f"\n\nNote from the team: {note}" if note else ""
+    sms_note = f" Note: {short(note)}" if note else ""
+    resolved = new_status == "resolved"
+
+    link = f"{BASE_URL}/track/{r['complaint_id']}"
+    email = f"Hello,\n\nYour report \"{r['title']}\" (ID {r['complaint_id']}) {phrase}.{note_line}"
+    if resolved:
+        email += f"\n\nPlease confirm the problem is really fixed: {link}"
+    email += f"\n\nTrack it here: {link}\n\nCivicConnect"
+    sms = f"CivicConnect: your report {r['complaint_id']} {phrase}.{sms_note}"
+    if resolved:
+        sms += " Please confirm the fix on the Track page."
+    send_notifications(db, r, f"CivicConnect: update on report {r['complaint_id']}", email, sms)
+
+    linked = db.execute("SELECT * FROM reports WHERE duplicate_of = ?", (r["id"],)).fetchall()
+    for l in linked:
+        l_link = f"{BASE_URL}/track/{l['complaint_id']}"
+        l_email = (
+            f"Hello,\n\nThe problem you reported (ID {l['complaint_id']}) was already raised earlier by "
+            f"someone else, and it {phrase}.{note_line}\n\nTrack it here: {l_link}\n\nCivicConnect"
+        )
+        l_sms = f"CivicConnect: the problem you reported ({l['complaint_id']}) {phrase}.{sms_note}"
+        send_notifications(db, l, f"CivicConnect: update on report {l['complaint_id']}", l_email, l_sms)
+
+
+@app.after_request
+def send_queued_notifications(response):
+    jobs = g.pop("jobs", None)
+    if jobs:
+        notifier.dispatch(jobs, DB_PATH)
+    return response
 
 
 def admin_required(view):
@@ -235,6 +418,9 @@ def report():
         description = form.get("description", "").strip()
         category = form.get("category", "")
         lat, lng, loc_error = parse_location(form.get("lat"), form.get("lng"))
+        email = form.get("contact_email", "").strip() or None
+        phone, phone_error = normalise_phone(form.get("contact_phone", ""))
+        consent = form.get("consent") == "on"
 
         error = None
         if not 5 <= len(title) <= 120:
@@ -245,6 +431,12 @@ def report():
             error = "Choose a category."
         elif loc_error:
             error = loc_error
+        elif email and (not EMAIL_RE.fullmatch(email) or len(email) > 254):
+            error = "Enter a valid email address, or leave it empty."
+        elif phone_error:
+            error = phone_error
+        elif (email or phone) and not consent:
+            error = "Tick the box to confirm you agree to receive updates about this report."
 
         if error:
             flash(error, "error")
@@ -252,10 +444,18 @@ def report():
 
         db = get_db()
         dup_id = None
-        dup_raw = form.get("duplicate_of", "").strip()
-        if dup_raw.isdigit():
+        original = None
+        dup_raw = form.get("duplicate_of")
+        if dup_raw is None and lat is not None:
+            # The person was not shown a choice: link to the FIRST report raised nearby, if any.
+            nearby = find_duplicates(db, category, lat, lng)
+            if nearby:
+                dup_raw = str(nearby[0]["id"])
+        if dup_raw and dup_raw.strip().isdigit():
             original = db.execute(
-                "SELECT id FROM reports WHERE id = ? AND duplicate_of IS NULL", (int(dup_raw),)
+                "SELECT * FROM reports WHERE id = ? AND duplicate_of IS NULL "
+                "AND status IN ('submitted','under_review','in_progress','reopened')",
+                (int(dup_raw),),
             ).fetchone()
             if original:
                 dup_id = original["id"]
@@ -265,9 +465,11 @@ def report():
         stamp = now_str()
         cur = db.execute(
             """INSERT INTO reports (complaint_id, title, description, category, lat, lng,
-                                    image, duplicate_of, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (complaint_id, title, description, category, lat, lng, image, dup_id, stamp, stamp),
+                                    image, duplicate_of, contact_email, contact_phone,
+                                    created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (complaint_id, title, description, category, lat, lng, image, dup_id,
+             email, phone, stamp, stamp),
         )
         add_history(db, cur.lastrowid, "submitted", "Report received. Not yet reviewed by an administrator.")
         if dup_id:
@@ -275,6 +477,11 @@ def report():
                 "UPDATE reports SET duplicate_count = duplicate_count + 1, updated_at = ? WHERE id = ?",
                 (stamp, dup_id),
             )
+        new_row = db.execute("SELECT * FROM reports WHERE id = ?", (cur.lastrowid,)).fetchone()
+        if original:
+            notify_linked_on_submit(db, new_row, original)
+        else:
+            notify_received(db, new_row)
         db.commit()
         return redirect(url_for("submitted", complaint_id=complaint_id))
 
@@ -284,7 +491,8 @@ def report():
 @app.route("/submitted/<complaint_id>")
 def submitted(complaint_id):
     row = get_db().execute(
-        "SELECT complaint_id, duplicate_of FROM reports WHERE complaint_id = ?", (complaint_id,)
+        "SELECT complaint_id, duplicate_of, contact_email, contact_phone FROM reports WHERE complaint_id = ?",
+        (complaint_id,)
     ).fetchone()
     if not row:
         abort(404)
@@ -306,17 +514,23 @@ def track_detail(complaint_id):
     if not r:
         flash("No report found with that ID. Check it and try again.", "error")
         return redirect(url_for("track"))
-    history = db.execute(
-        "SELECT * FROM status_updates WHERE report_id = ? ORDER BY id", (r["id"],)
+    original = None
+    if r["duplicate_of"]:
+        original = db.execute("SELECT * FROM reports WHERE id = ?", (r["duplicate_of"],)).fetchone()
+    shown = original or r  # a linked report shows the progress of the report raised first
+    rows = db.execute(
+        "SELECT * FROM status_updates WHERE report_id = ? ORDER BY id", (shown["id"],)
     ).fetchall()
-    return render_template("track_detail.html", r=r, history=history)
+    # Never show another person's comments to a linked reporter
+    history = [h for h in rows if not (original and (h["note"] or "").startswith("Citizen"))]
+    return render_template("track_detail.html", r=r, shown=shown, original=original, history=history)
 
 
 @app.route("/track/<complaint_id>/verify", methods=["POST"])
 def verify_fix(complaint_id):
     db = get_db()
     r = db.execute("SELECT * FROM reports WHERE complaint_id = ?", (complaint_id.upper(),)).fetchone()
-    if not r or r["status"] != "resolved":
+    if not r or r["status"] != "resolved" or r["duplicate_of"]:
         abort(400)
     comment = request.form.get("comment", "").strip()[:500]
     stamp = now_str()
@@ -501,8 +715,9 @@ def admin_report(report_id):
                    WHERE id = ?""",
                 (new_status, stamp, new_status, new_status, stamp, new_status, r["id"]),
             )
+            notify_status_change(db, r, new_status, note)
             db.commit()
-            flash("Status updated and recorded in the timeline.", "success")
+            flash("Status updated, recorded in the timeline, and people were notified.", "success")
             return redirect(url_for("admin_report", report_id=r["id"]))
 
     history = db.execute("SELECT * FROM status_updates WHERE report_id = ? ORDER BY id", (r["id"],)).fetchall()
@@ -513,9 +728,30 @@ def admin_report(report_id):
     if r["duplicate_of"]:
         original = db.execute("SELECT id, title FROM reports WHERE id = ?", (r["duplicate_of"],)).fetchone()
     score, reason = priority(r)
+    sent = db.execute(
+        """SELECT n.*, rp.complaint_id FROM notifications n
+           JOIN reports rp ON rp.id = n.report_id
+           WHERE n.report_id = ? OR rp.duplicate_of = ?
+           ORDER BY n.id DESC LIMIT 30""",
+        (r["id"], r["id"]),
+    ).fetchall()
     return render_template(
         "admin_report.html", r=r, history=history, linked=linked, original=original,
-        score=score, reason=reason,
+        score=score, reason=reason, sent=sent,
+    )
+
+
+@app.route("/admin/notifications")
+@admin_required
+def admin_notifications():
+    rows = get_db().execute(
+        """SELECT n.*, rp.complaint_id FROM notifications n
+           JOIN reports rp ON rp.id = n.report_id
+           ORDER BY n.id DESC LIMIT 100"""
+    ).fetchall()
+    return render_template(
+        "admin_notifications.html", rows=rows,
+        email_live=notifier.email_live(), sms_live=notifier.sms_live(),
     )
 
 
@@ -532,6 +768,4 @@ def too_large(_e):
 
 
 if __name__ == "__main__":
-    app.run(debug=True, use_reloader=False)
-    
-     
+    app.run(debug=True)

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Notification log{% endblock %}
+{% block content %}
+<p><a href="/dashboard">← Back to dashboard</a></p>
+<h1>Notification log</h1>
+
+<section class="card">
+    <p>
+        <strong>Email:</strong>
+        {% if email_live %}<span class="badge sent">Live</span>{% else %}<span class="badge simulated">Simulated</span>{% endif %}
+        &nbsp;
+        <strong>SMS:</strong>
+        {% if sms_live %}<span class="badge sent">Live</span>{% else %}<span class="badge simulated">Simulated</span>{% endif %}
+    </p>
+    <p class="hint">Simulated means no provider is connected yet: the message is saved here and printed in the terminal, but not delivered. Add your settings in the .env file to send for real.</p>
+
+    {% if rows %}
+    <div class="table-wrap">
+    <table>
+        <thead><tr><th>Time</th><th>Report</th><th>Channel</th><th>To</th><th>Message</th><th>Status</th></tr></thead>
+        <tbody>
+        {% for n in rows %}
+            <tr>
+                <td>{{ n['created_at'] }}</td>
+                <td>{{ n['complaint_id'] }}</td>
+                <td>{{ n['channel']|upper }}</td>
+                <td>{{ n['recipient']|mask_email if n['channel'] == 'email' else n['recipient']|mask_phone }}</td>
+                <td class="msg">{{ n['message'] }}</td>
+                <td>
+                    <span class="badge {{ n['status'] }}">{{ n['status']|capitalize }}</span>
+                    {% if n['error'] %}<br><small class="muted">{{ n['error'] }}</small>{% endif %}
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+        <p class="muted">No notifications yet. They appear when someone submits a report with an email or mobile number, or when you update a status.</p>
+    {% endif %}
+</section>
+{% endblock %}
