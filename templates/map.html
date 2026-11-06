@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Issue map{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+{% endblock %}
+
+{% block content %}
+<section class="card">
+    <h1>Community issue map</h1>
+    <p class="muted">Locations are approximate. Red circles mark spots where the same kind of problem keeps being reported.</p>
+
+    <div class="legend">
+        <span><i class="dot submitted"></i>Submitted</span>
+        <span><i class="dot under_review"></i>Under review</span>
+        <span><i class="dot in_progress"></i>In progress</span>
+        <span><i class="dot resolved"></i>Resolved</span>
+        <span><i class="dot reopened"></i>Reopened</span>
+        <span><i class="dot hotspot"></i>Recurring problem</span>
+    </div>
+
+    <div id="map" class="map large"></div>
+    <p id="empty" class="muted" hidden>No reports with a location yet. Be the first to <a href="/report">report an issue</a>.</p>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    const COLORS = {
+        submitted: '#64748b', under_review: '#d97706', in_progress: '#2563eb',
+        resolved: '#16a34a', reopened: '#dc2626'
+    };
+
+    const map = L.map('map').setView([{{ center[0] }}, {{ center[1] }}], 12);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    function popup(lines) {
+        const div = document.createElement('div');
+        lines.forEach((text, i) => {
+            const el = document.createElement(i === 0 ? 'strong' : 'div');
+            el.textContent = text;
+            div.appendChild(el);
+        });
+        return div;
+    }
+
+    Promise.all([
+        fetch('/api/hotspots').then(r => r.json()),
+        fetch('/api/reports').then(r => r.json())
+    ]).then(([hotspots, reports]) => {
+        const bounds = [];
+
+        hotspots.forEach(h => {
+            L.circle([h.lat, h.lng], { radius: 150, color: '#dc2626', weight: 1, fillColor: '#dc2626', fillOpacity: 0.15 })
+                .bindPopup(popup(['Recurring problem', h.category, h.count + ' reports in this area']))
+                .addTo(map);
+            bounds.push([h.lat, h.lng]);
+        });
+
+        reports.forEach(r => {
+            L.circleMarker([r.lat, r.lng], {
+                radius: 8, color: '#ffffff', weight: 2,
+                fillColor: COLORS[r.status] || '#64748b', fillOpacity: 0.95
+            })
+            .bindPopup(popup([
+                r.title,
+                r.category,
+                r.status_label + (r.verified ? '' : ' (unverified)'),
+                r.duplicates ? r.duplicates + ' similar report(s) merged' : 'Single report'
+            ]))
+            .addTo(map);
+            bounds.push([r.lat, r.lng]);
+        });
+
+        if (bounds.length) { map.fitBounds(bounds, { padding: [30, 30] }); }
+        else { document.getElementById('empty').hidden = false; }
+    });
+</script>
+{% endblock %}

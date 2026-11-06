@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Admin dashboard{% endblock %}
+{% block content %}
+<h1>Admin dashboard</h1>
+
+<section class="stats">
+    <div class="stat"><strong>{{ stats.total }}</strong><small>Total reports</small></div>
+    <div class="stat"><strong>{{ stats.open }}</strong><small>Open issues</small></div>
+    <div class="stat"><strong>{{ stats.resolved }}</strong><small>Resolved</small></div>
+    <div class="stat"><strong>{{ stats.unverified }}</strong><small>Waiting for review</small></div>
+    <div class="stat"><strong>{{ stats.avg_days if stats.avg_days is not none else '-' }}</strong><small>Avg. days to resolve</small></div>
+</section>
+
+<section class="two-col">
+    <div class="card">
+        <h3>Reports by category</h3>
+        {% if by_category %}
+            {% for label, count in by_category %}
+            <div class="bar-row">
+                <span class="bar-label">{{ label }}</span>
+                <span class="bar-track"><span class="bar-fill" style="width: {{ (count / max_cat * 100)|round|int }}%"></span></span>
+                <span class="bar-count">{{ count }}</span>
+            </div>
+            {% endfor %}
+        {% else %}
+            <p class="muted">No reports yet.</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h3>Recurring problems</h3>
+        {% if hotspots %}
+            <ul class="plain">
+            {% for h in hotspots %}
+                <li><strong>{{ h.category }}</strong>: {{ h.count }} reports near {{ h.lat }}, {{ h.lng }}</li>
+            {% endfor %}
+            </ul>
+        {% else %}
+            <p class="muted">No area has 3 or more reports of the same kind yet.</p>
+        {% endif %}
+    </div>
+</section>
+
+<section class="card">
+    <h3>{% if status_filter %}{{ STATUS_LABELS[status_filter] }} reports{% else %}Open issues, highest priority first{% endif %}</h3>
+    <div class="filters">
+        <a href="/dashboard" class="{{ '' if status_filter else 'active' }}">Open</a>
+        {% for key, label in STATUS_LABELS.items() %}
+            <a href="/dashboard?status={{ key }}" class="{{ 'active' if status_filter == key else '' }}">{{ label }}</a>
+        {% endfor %}
+    </div>
+
+    {% if queue %}
+    <div class="table-wrap">
+    <table>
+        <thead>
+            <tr><th>ID</th><th>Issue</th><th>Category</th><th>Priority</th><th>Similar</th><th>Status</th><th>Reported</th><th></th></tr>
+        </thead>
+        <tbody>
+        {% for item in queue %}
+            <tr>
+                <td>{{ item.r['complaint_id'] }}</td>
+                <td>{{ item.r['title'] }}</td>
+                <td>{{ CATEGORIES[item.r['category']][0] }}</td>
+                <td><span class="score" title="{{ item.reason }}">{{ item.score }}</span></td>
+                <td>{{ item.r['duplicate_count'] }}</td>
+                <td>
+                    <span class="badge {{ item.r['status'] }}">{{ STATUS_LABELS[item.r['status']] }}</span>
+                    {% if not item.r['is_verified'] %}<span class="badge unverified">Unverified</span>{% endif %}
+                </td>
+                <td>{{ item.r['created_at'][:10] }}</td>
+                <td><a href="{{ url_for('admin_report', report_id=item.r['id']) }}" class="btn small-btn">Review</a></td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    <p class="hint">Hover over a priority number to see how it was calculated.</p>
+    {% else %}
+        <p class="muted">Nothing here. New reports will appear as soon as citizens submit them.</p>
+    {% endif %}
+</section>
+{% endblock %}

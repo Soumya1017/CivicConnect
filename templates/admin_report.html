@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Review {{ r['complaint_id'] }}{% endblock %}
+{% block content %}
+<p><a href="/dashboard">← Back to dashboard</a></p>
+
+<section class="two-col wide-left">
+    <div class="card">
+        <p class="muted">Complaint {{ r['complaint_id'] }}</p>
+        <h1>{{ r['title'] }}</h1>
+        <p>
+            <span class="badge {{ r['status'] }}">{{ STATUS_LABELS[r['status']] }}</span>
+            {% if not r['is_verified'] %}<span class="badge unverified">Unverified</span>{% endif %}
+            <span class="muted">{{ CATEGORIES[r['category']][0] }} · reported {{ r['created_at'] }}</span>
+        </p>
+
+        <p>{{ r['description'] }}</p>
+        {% if r['image'] %}
+            <img class="photo" src="{{ url_for('static', filename='uploads/' + r['image']) }}" alt="Photo submitted with the report">
+        {% endif %}
+
+        <h3>Details</h3>
+        <ul class="plain">
+            <li><strong>Priority:</strong> {{ score }} <span class="muted">({{ reason }})</span></li>
+            <li><strong>Location:</strong>
+                {% if r['lat'] is not none %}
+                    <a href="https://www.openstreetmap.org/?mlat={{ r['lat'] }}&mlon={{ r['lng'] }}#map=18/{{ r['lat'] }}/{{ r['lng'] }}" target="_blank" rel="noopener">{{ '%.5f'|format(r['lat']) }}, {{ '%.5f'|format(r['lng']) }}</a>
+                {% else %}Not provided{% endif %}
+            </li>
+            {% if original %}
+                <li><strong>Linked to:</strong> <a href="{{ url_for('admin_report', report_id=original['id']) }}">{{ original['title'] }}</a></li>
+            {% endif %}
+            {% if linked %}
+                <li><strong>Similar reports merged into this one:</strong> {{ linked|length }}
+                    <span class="muted">({% for l in linked %}{{ l['complaint_id'] }}{% if not loop.last %}, {% endif %}{% endfor %})</span>
+                </li>
+            {% endif %}
+            {% if r['citizen_verified'] == 1 %}<li><strong>Citizen confirmed the fix.</strong></li>{% endif %}
+        </ul>
+
+        <h3>Timeline</h3>
+        <ol class="timeline">
+            {% for h in history %}
+            <li>
+                <strong>{{ STATUS_LABELS[h['status']] }}</strong>
+                <span class="muted">{{ h['created_at'] }}</span>
+                {% if h['note'] %}<p>{{ h['note'] }}</p>{% endif %}
+                {% if h['proof_image'] %}
+                    <img class="photo" src="{{ url_for('static', filename='uploads/' + h['proof_image']) }}" alt="Photo showing the completed work">
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ol>
+    </div>
+
+    <div class="card">
+        <h3>Update status</h3>
+        <form method="POST" enctype="multipart/form-data">
+            <label for="status">New status</label>
+            <select id="status" name="status" required>
+                {% for key, label in STATUS_LABELS.items() if key != 'submitted' %}
+                    <option value="{{ key }}" {% if r['status'] == key %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+
+            <label for="note">Note for the citizen</label>
+            <textarea id="note" name="note" rows="4" maxlength="1000"
+                      placeholder="Example: Crew inspected the site and repair is scheduled for Friday."></textarea>
+            <p class="hint">A note is required to mark a report Resolved or Rejected.</p>
+
+            <label for="proof">Photo of completed work <span class="muted">(optional)</span></label>
+            <input id="proof" name="proof" type="file" accept="image/png,image/jpeg,image/webp">
+
+            <button type="submit" class="btn full">Save update</button>
+        </form>
+    </div>
+</section>
+{% endblock %}

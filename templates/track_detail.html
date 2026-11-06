@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}{{ r['complaint_id'] }}{% endblock %}
+{% block content %}
+<section class="card narrow">
+    <p class="muted">Complaint {{ r['complaint_id'] }}</p>
+    <h1>{{ r['title'] }}</h1>
+    <p>
+        <span class="badge {{ r['status'] }}">{{ STATUS_LABELS[r['status']] }}</span>
+        {% if not r['is_verified'] %}<span class="badge unverified">Unverified</span>{% endif %}
+        <span class="muted">{{ CATEGORIES[r['category']][0] }} · reported {{ r['created_at'][:10] }}</span>
+    </p>
+    {% if not r['is_verified'] %}
+        <p class="note">An administrator has not reviewed this report yet.</p>
+    {% endif %}
+
+    <h3>Your description</h3>
+    <p>{{ r['description'] }}</p>
+    {% if r['image'] %}
+        <img class="photo" src="{{ url_for('static', filename='uploads/' + r['image']) }}" alt="Photo submitted with the report">
+    {% endif %}
+
+    <h3>Progress</h3>
+    <ol class="timeline">
+        {% for h in history %}
+        <li>
+            <strong>{{ STATUS_LABELS[h['status']] }}</strong>
+            <span class="muted">{{ h['created_at'] }}</span>
+            {% if h['note'] %}<p>{{ h['note'] }}</p>{% endif %}
+            {% if h['proof_image'] %}
+                <img class="photo" src="{{ url_for('static', filename='uploads/' + h['proof_image']) }}" alt="Photo showing the completed work">
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ol>
+
+    {% if r['status'] == 'resolved' and r['citizen_verified'] is none %}
+    <div class="verify-box">
+        <h3>Is the problem actually fixed?</h3>
+        <p class="muted">Your answer helps us confirm the work was done.</p>
+        <form method="POST" action="{{ url_for('verify_fix', complaint_id=r['complaint_id']) }}">
+            <label for="comment">Comment <span class="muted">(optional)</span></label>
+            <input id="comment" name="comment" type="text" maxlength="500" placeholder="Anything we should know?">
+            <button type="submit" name="fixed" value="yes" class="btn">Yes, it is fixed</button>
+            <button type="submit" name="fixed" value="no" class="btn danger">No, it is still a problem</button>
+        </form>
+    </div>
+    {% elif r['status'] == 'resolved' and r['citizen_verified'] == 1 %}
+        <p class="note success-note">You confirmed this fix. Thank you.</p>
+    {% endif %}
+</section>
+{% endblock %}

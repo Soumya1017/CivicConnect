@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Track a report{% endblock %}
+{% block content %}
+<section class="card narrow">
+    <h1>Track a report</h1>
+    <p class="muted">Enter the complaint ID you received when you submitted your report.</p>
+    <form method="GET" action="/track">
+        <label for="id">Complaint ID</label>
+        <input id="id" name="id" type="text" placeholder="Example: CC-7K2M9X" required autocomplete="off">
+        <button type="submit" class="btn full">Find my report</button>
+    </form>
+</section>
+{% endblock %}

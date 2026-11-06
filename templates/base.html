@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}CivicConnect{% endblock %} | CivicConnect</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+    {% block head %}{% endblock %}
+</head>
+<body>
+
+<nav class="navbar">
+    <h2>🌍 CivicConnect</h2>
+    <div>
+        <a href="/">Home</a>
+        <a href="/report">Report Issue</a>
+        <a href="/track">Track Report</a>
+        <a href="/map">Map</a>
+        <a href="/dashboard">Dashboard</a>
+        {% if session.get('admin') %}<a href="/admin/logout">Log out</a>{% endif %}
+    </div>
+</nav>
+
+<main class="container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+            <div class="flash {{ category }}" role="status">{{ message }}</div>
+        {% endfor %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+</main>
+
+<footer>
+    <p>© 2026 CivicConnect | Community Problem Reporting System</p>
+</footer>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

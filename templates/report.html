@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Report an issue{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+{% endblock %}
+
+{% block content %}
+<section class="card narrow">
+    <h1>Report a problem</h1>
+    <p class="muted">Tell us what is wrong and where. You will get a complaint ID to track progress.</p>
+
+    <form method="POST" enctype="multipart/form-data">
+        <label for="category">What kind of problem is it?</label>
+        <select id="category" name="category" required>
+            <option value="" disabled {% if not form.get('category') %}selected{% endif %}>Choose a category</option>
+            {% for slug, info in CATEGORIES.items() %}
+                <option value="{{ slug }}" {% if form.get('category') == slug %}selected{% endif %}>{{ info[0] }}</option>
+            {% endfor %}
+        </select>
+
+        <label for="title">Short title</label>
+        <input id="title" name="title" type="text" minlength="5" maxlength="120" required
+               placeholder="Example: Large pothole near the bus stop" value="{{ form.get('title', '') }}">
+
+        <label for="description">Details</label>
+        <textarea id="description" name="description" rows="4" maxlength="2000" required
+                  placeholder="What did you see? How long has it been like this?">{{ form.get('description', '') }}</textarea>
+
+        <label>Location <span class="muted">(optional, tap the map to drop a pin)</span></label>
+        <div id="picker" class="map small"></div>
+        <button type="button" id="locate" class="btn secondary small-btn">Use my current location</button>
+        <input type="hidden" name="lat" id="lat" value="{{ form.get('lat', '') }}">
+        <input type="hidden" name="lng" id="lng" value="{{ form.get('lng', '') }}">
+        <p class="hint">Pin a spot only if you are comfortable sharing it. The public map shows an approximate position, never your exact pin.</p>
+
+        <div id="duplicates" aria-live="polite"></div>
+
+        <label for="image">Photo <span class="muted">(optional, JPG, PNG or WebP, up to 5 MB)</span></label>
+        <input id="image" name="image" type="file" accept="image/png,image/jpeg,image/webp">
+        <p class="hint">Avoid photos that show faces or number plates.</p>
+
+        <button type="submit" class="btn full">Submit report</button>
+    </form>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    const latEl = document.getElementById('lat');
+    const lngEl = document.getElementById('lng');
+    const catEl = document.getElementById('category');
+    const box = document.getElementById('duplicates');
+
+    const map = L.map('picker').setView([{{ center[0] }}, {{ center[1] }}], 13);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    let marker = null;
+    function setPoint(lat, lng) {
+        latEl.value = lat.toFixed(6);
+        lngEl.value = lng.toFixed(6);
+        if (marker) { marker.setLatLng([lat, lng]); }
+        else { marker = L.marker([lat, lng]).addTo(map); }
+        checkDuplicates();
+    }
+
+    if (latEl.value && lngEl.value) {
+        const lat = parseFloat(latEl.value), lng = parseFloat(lngEl.value);
+        map.setView([lat, lng], 16);
+        marker = L.marker([lat, lng]).addTo(map);
+    }
+
+    map.on('click', (e) => setPoint(e.latlng.lat, e.latlng.lng));
+
+    document.getElementById('locate').addEventListener('click', () => {
+        if (!navigator.geolocation) { alert('Your browser cannot share location. Tap the map instead.'); return; }
+        navigator.geolocation.getCurrentPosition(
+            (p) => { map.setView([p.coords.latitude, p.coords.longitude], 17); setPoint(p.coords.latitude, p.coords.longitude); },
+            () => alert('Could not get your location. Tap the map to drop a pin instead.')
+        );
+    });
+
+    catEl.addEventListener('change', checkDuplicates);
+
+    async function checkDuplicates() {
+        box.innerHTML = '';
+        if (!latEl.value || !catEl.value) return;
+        let list = [];
+        try {
+            const res = await fetch('/api/duplicates?category=' + encodeURIComponent(catEl.value) +
+                                    '&lat=' + latEl.value + '&lng=' + lngEl.value);
+            list = await res.json();
+        } catch (err) { return; }
+        if (!list.length) return;
+
+        const wrap = document.createElement('div');
+        wrap.className = 'dup-box';
+        const head = document.createElement('p');
+        head.className = 'dup-title';
+        head.textContent = 'Similar open reports found nearby. Is yours the same issue?';
+        wrap.appendChild(head);
+
+        list.forEach((d) => {
+            const label = document.createElement('label');
+            label.className = 'dup';
+            const radio = document.createElement('input');
+            radio.type = 'radio'; radio.name = 'duplicate_of'; radio.value = d.id;
+            label.appendChild(radio);
+            label.append(' ' + d.title + ' (' + d.distance + ' m away, ' + d.status_label + ')');
+            wrap.appendChild(label);
+        });
+
+        const none = document.createElement('label');
+        none.className = 'dup';
+        const noneRadio = document.createElement('input');
+        noneRadio.type = 'radio'; noneRadio.name = 'duplicate_of'; noneRadio.value = ''; noneRadio.checked = true;
+        none.appendChild(noneRadio);
+        none.append(' No, mine is a different issue');
+        wrap.appendChild(none);
+
+        box.appendChild(wrap);
+    }
+
+    checkDuplicates();
+</script>
+{% endblock %}

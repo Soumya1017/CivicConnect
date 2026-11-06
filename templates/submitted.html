@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Report received{% endblock %}
+{% block content %}
+<section class="card narrow center">
+    <div class="icon">✅</div>
+    <h1>Report received</h1>
+    <p class="muted">Save this complaint ID. You need it to track progress.</p>
+    <p class="big-id">{{ r['complaint_id'] }}</p>
+    {% if r['duplicate_of'] %}
+        <p class="note">Your report was linked to a similar open issue, which raises its priority.</p>
+    {% endif %}
+    <p class="note">An administrator has not reviewed your report yet, so it shows as Unverified until they do.</p>
+    <p>
+        <a href="{{ url_for('track_detail', complaint_id=r['complaint_id']) }}" class="btn">Track this report</a>
+        <a href="/report" class="btn secondary">Report another</a>
+    </p>
+</section>
+{% endblock %}
